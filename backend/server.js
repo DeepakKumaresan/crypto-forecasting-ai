@@ -95,7 +95,19 @@ wss.on('connection', (ws) => {
 
 // Error handling middleware
 app.use(Sentry.Handlers.errorHandler());
-app.use(errorHandler);
+// Check if errorHandler is a function before using it
+if (typeof errorHandler === 'function') {
+  app.use(errorHandler);
+} else {
+  // Fallback error handler if the imported one is not a function
+  app.use((err, req, res, next) => {
+    console.error('Server error:', err);
+    res.status(500).json({ 
+      error: 'Internal Server Error',
+      message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : err.message
+    });
+  });
+}
 
 // Catch-all route
 app.use('*', (req, res) => {
