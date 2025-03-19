@@ -14,7 +14,7 @@ const { logger } = require('../utils/logger');
 const auth = (req, res, next) => {
   try {
     // Get token from header
-    const authHeader = req.header('Authorization');
+    const authHeader = req.header('Authorization')?.trim();
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ 
@@ -23,7 +23,7 @@ const auth = (req, res, next) => {
       });
     }
     
-    const token = authHeader.split(' ')[1];
+    const token = authHeader.split(' ')[1]?.trim();
     
     if (!token) {
       return res.status(401).json({ 
@@ -62,7 +62,7 @@ const auth = (req, res, next) => {
     }
     
     logger.error(`Auth middleware error: ${error.message}`, { error });
-    errorHandler(error, req, res);
+    return errorHandler(error, req, res); // ✅ Ensure errorHandler is correctly used
   }
 };
 

@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const Sentry = require('@sentry/node');
 
 // In a real application, you would use a database to store users
