@@ -125,3 +125,28 @@ exports.getTradingPairs = async (req, res) => {
 exports.getStats = async (req, res) => {
   return res.status(200).json({ success: true, message: "getStats placeholder" });
 };
+
+// ✅ Added missing function executeManualTrade
+exports.executeManualTrade = async (req, res) => {
+  try {
+    const { symbol, side, quantity, price } = req.body;
+
+    if (!symbol || !side || !quantity) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required trade parameters'
+      });
+    }
+
+    // Execute trade logic (you might need to call a service here)
+    const tradeResult = await tradingService.executeTrade(symbol, side, quantity, price);
+
+    return res.status(200).json({ success: true, data: tradeResult });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to execute manual trade',
+      error: error.message
+    });
+  }
+};
