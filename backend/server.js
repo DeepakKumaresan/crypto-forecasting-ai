@@ -15,25 +15,21 @@ const marketDataSocket = require('./websockets/marketDataSocket');
 // Load environment variables
 dotenv.config();
 
-// Initialize Sentry for error tracking
+// ✅ Initialize express app before using it in Sentry
+const app = express();
+const server = http.createServer(app);
+
+// Initialize Sentry for error tracking (Moved below app initialization)
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   integrations: [
-    // Enable HTTP calls tracing
     new Sentry.Integrations.Http({ tracing: true }),
-    // Enable Express.js middleware tracing
-    new Sentry.Integrations.Express({ app }),
+    new Sentry.Integrations.Express({ app }), // ✅ Now 'app' is defined before this line
     new ProfilingIntegration(),
   ],
-  // Set tracesSampleRate to 1.0 for dev, lower in production
   tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
-  // Profiling sample rate is relative to tracesSampleRate
   profilesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
 });
-
-// Initialize express app
-const app = express();
-const server = http.createServer(app);
 
 // Set up WebSocket server
 const wss = new WebSocket.Server({ server });
@@ -121,7 +117,6 @@ server.listen(PORT, () => {
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
   Sentry.captureException(error);
-  // Give Sentry time to send the error before shutting down
   setTimeout(() => {
     process.exit(1);
   }, 1000);
