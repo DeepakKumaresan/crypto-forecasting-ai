@@ -3,7 +3,7 @@ const axios = require('axios');
 const router = express.Router();
 const authController = require('../controllers/authController');
 const tradeController = require('../controllers/tradeController');
-const { authenticate } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth'); // Ensure this matches your auth.js exports
 
 const MARKET_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'];
 
