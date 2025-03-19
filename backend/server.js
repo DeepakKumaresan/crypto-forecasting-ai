@@ -7,7 +7,7 @@ const morgan = require('morgan');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const Sentry = require('@sentry/node');
-const { ProfilingIntegration } = require('@sentry/profiling-node');
+// Removed ProfilingIntegration import as it's causing errors
 const routes = require('./routes');
 const errorHandler = require('./utils/errorHandler');
 const marketDataSocket = require('./websockets/marketDataSocket');
@@ -15,20 +15,20 @@ const marketDataSocket = require('./websockets/marketDataSocket');
 // Load environment variables
 dotenv.config();
 
-// ✅ Initialize express app before using it in Sentry
+// Initialize express app before using it in Sentry
 const app = express();
 const server = http.createServer(app);
 
-// Initialize Sentry for error tracking (Moved below app initialization)
+// Initialize Sentry for error tracking (without ProfilingIntegration)
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   integrations: [
     new Sentry.Integrations.Http({ tracing: true }),
-    new Sentry.Integrations.Express({ app }), // ✅ Now 'app' is defined before this line
-    new ProfilingIntegration(),
+    new Sentry.Integrations.Express({ app }),
+    // Removed ProfilingIntegration that was causing the error
   ],
   tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
-  profilesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
+  // Removed profilesSampleRate as it's related to the removed ProfilingIntegration
 });
 
 // Set up WebSocket server
@@ -60,7 +60,7 @@ app.use('/api/', apiLimiter);
 // API routes
 app.use('/api', routes);
 
-// ✅ Fallback API for market data
+// Fallback API for market data
 app.get('/api/market/fallback', async (req, res) => {
   try {
     const fallbackData = await marketDataSocket.getFallbackMarketData();
