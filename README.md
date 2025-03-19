@@ -148,7 +148,3 @@ The project follows a modular structure:
 - WebSocket connections use secure protocols
 - User authentication is required for all trading operations
 - Sentry and Datadog monitor for unusual activity
-
-## License
-
-[MIT License](LICENSE)
