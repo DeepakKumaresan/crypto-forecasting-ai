@@ -3,7 +3,7 @@ const axios = require('axios');
 const router = express.Router();
 const authController = require('../controllers/authController');
 const tradeController = require('../controllers/tradeController');
-const { authenticate } = require('../middleware/auth'); // Ensure this matches your auth.js exports
+const { auth } = require('../middleware/auth'); // ✅ Correct import
 
 const MARKET_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'];
 
@@ -13,10 +13,10 @@ router.post('/auth/login', authController.login);
 router.post('/auth/verify', authController.verifyToken);
 
 // Trading routes (protected)
-router.use('/trades', authenticate);
-router.use('/trading', authenticate);
-router.use('/pairs', authenticate);
-router.use('/stats', authenticate);
+router.use('/trades', auth); // ✅ Fixed
+router.use('/trading', auth); // ✅ Fixed
+router.use('/pairs', auth); // ✅ Fixed
+router.use('/stats', auth); // ✅ Fixed
 
 // Trade routes
 router.get('/trades', tradeController.getTrades);
