@@ -3,7 +3,7 @@ const axios = require('axios');
 const router = express.Router();
 const authController = require('../controllers/authController');
 const tradeController = require('../controllers/tradeController');
-const { auth } = require('../middleware/auth'); // ✅ Correct import
+const { auth } = require('../middleware/auth'); // ✅ Ensure correct import
 
 const MARKET_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'];
 
@@ -13,10 +13,10 @@ router.post('/auth/login', authController.login);
 router.post('/auth/verify', authController.verifyToken);
 
 // Trading routes (protected)
-router.use('/trades', auth); // ✅ Fixed
-router.use('/trading', auth); // ✅ Fixed
-router.use('/pairs', auth); // ✅ Fixed
-router.use('/stats', auth); // ✅ Fixed
+router.use('/trades', auth);
+router.use('/trading', auth);
+router.use('/pairs', auth);
+router.use('/stats', auth);
 
 // Trade routes
 router.get('/trades', tradeController.getTrades);
@@ -41,11 +41,14 @@ router.get('/market/fallback', async (req, res) => {
             const response = await axios.get(`https://api.bitget.com/api/v2/market/ticker?symbol=${symbol}`);
             if (response.data && response.data.data) {
                 marketData.push(response.data.data);
+            } else {
+                console.warn(`⚠️ No data for ${symbol}`);
             }
         }
-        res.json(marketData);
+        res.json({ success: true, data: marketData });
     } catch (error) {
-        res.status(500).json({ error: 'Failed to fetch fallback market data' });
+        console.error(`❌ Error fetching fallback market data: ${error.message}`);
+        res.status(500).json({ success: false, message: 'Failed to fetch fallback market data', error: error.message });
     }
 });
 
