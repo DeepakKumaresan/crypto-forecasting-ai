@@ -2,7 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const router = express.Router();
 const authController = require('../controllers/authController');
-const tradeController = require('../controllers/tradeController') || {};
+const tradeController = require('../controllers/tradeController');
 const { auth } = require('../middleware/auth'); // ✅ Correct import
 
 const MARKET_SYMBOLS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT'];
