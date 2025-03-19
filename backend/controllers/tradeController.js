@@ -104,3 +104,24 @@ exports.getTradeHistory = async (req, res) => {
     });
   }
 };
+
+// ✅ Added missing functions to match routes/index.js
+exports.getTrades = async (req, res) => {
+  return res.status(200).json({ success: true, message: "getTrades placeholder" });
+};
+
+exports.createTrade = async (req, res) => {
+  return res.status(200).json({ success: true, message: "createTrade placeholder" });
+};
+
+exports.getTradeById = async (req, res) => {
+  return res.status(200).json({ success: true, message: "getTradeById placeholder" });
+};
+
+exports.getTradingPairs = async (req, res) => {
+  return res.status(200).json({ success: true, message: "getTradingPairs placeholder" });
+};
+
+exports.getStats = async (req, res) => {
+  return res.status(200).json({ success: true, message: "getStats placeholder" });
+};
