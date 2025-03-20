@@ -16,7 +16,7 @@ class TradingService {
     
     // Initialize the service
     this.initialize().catch(err => {
-      logger.error(`Failed to initialize trading service: ${err ? err.message || String(err) : 'Unknown error'}`);
+      logger.error(`Failed to initialize trading service: ${err ? err.message : 'Unknown error'}`);
     });
   }
 
@@ -31,7 +31,7 @@ class TradingService {
       // Start periodic updates
       setInterval(() => {
         this.updateTradingPairs().catch(err => {
-          logger.error(`Periodic trading pairs update failed: ${err ? err.message || String(err) : 'Unknown error'}`);
+          logger.error(`Periodic trading pairs update failed: ${err ? err.message : 'Unknown error'}`);
         });
       }, 3600000); // Update every hour
       
@@ -113,7 +113,7 @@ class TradingService {
       // If auto-trading is enabled, execute trades
       if (this.isAutoTradingEnabled) {
         await this.executeAutoTrades(filteredSignals).catch(err => {
-          logger.error(`Auto-trading execution failed: ${err ? err.message || String(err) : 'Unknown error'}`);
+          logger.error(`Auto-trading execution failed: ${err ? err.message : 'Unknown error'}`);
         });
       }
       
