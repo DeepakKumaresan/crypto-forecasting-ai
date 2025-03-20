@@ -1,6 +1,6 @@
 /**
  * Market Data WebSocket for real-time crypto trading data
- * Connects to Bitget WebSocket API and filters for high-value USDT pairs
+ * Connects to Bitget WebSocket API and filters for top 10 large-cap and 30 mid-cap USDT pairs
  */
 
 const WebSocket = require('ws');
@@ -24,6 +24,11 @@ class MarketDataSocket extends EventEmitter {
     this.clients = new Set();
     this.cachedMarketData = {}; // Cache for market data
     this.lastUpdated = 0;
+    
+    // Total number of pairs to track
+    this.totalPairsCount = 40;
+    this.largeCapCount = 10;  // Top 10 large-cap pairs
+    this.midCapCount = 30;    // Top 30 mid-cap pairs
   }
 
   /**
@@ -45,6 +50,7 @@ class MarketDataSocket extends EventEmitter {
 
   /**
    * Update list of active trading pairs
+   * Now filters specifically for top 10 large-cap and 30 mid-cap USDT pairs
    */
   async updateTradingPairs() {
     try {
@@ -55,28 +61,46 @@ class MarketDataSocket extends EventEmitter {
       }
       
       // Filter for USDT pairs with sufficient volume
-      const filteredPairs = marketData
+      const usdtPairs = marketData
         .filter(pair => {
           // Extract base symbol (e.g., BTC from BTC_USDT)
           const symbol = pair.symbol.split('_')[0];
-          const volume = parseFloat(pair.usdtVolume);
-          
-          // Filter for pairs with at least $1M in 24h volume
-          return symbol && volume && volume >= 1000000;
+          return symbol && pair.symbol.endsWith('_USDT');
         })
-        .map(pair => pair.symbol.split('_')[0]); // Extract base symbol
+        .map(pair => ({
+          symbol: pair.symbol.split('_')[0],
+          volume: parseFloat(pair.usdtVolume),
+          marketCap: parseFloat(pair.marketCap || 0)
+        }))
+        .filter(pair => pair.volume > 0); // Ensure we have volume data
+      
+      // Sort pairs by market cap (descending)
+      usdtPairs.sort((a, b) => b.marketCap - a.marketCap);
+      
+      // Select top 10 large-cap pairs
+      const largeCapPairs = usdtPairs.slice(0, this.largeCapCount).map(pair => pair.symbol);
+      
+      // Select next 30 mid-cap pairs
+      const midCapPairs = usdtPairs
+        .slice(this.largeCapCount, this.largeCapCount + this.midCapCount)
+        .map(pair => pair.symbol);
+      
+      // Combine the selected pairs
+      const selectedPairs = [...largeCapPairs, ...midCapPairs];
       
       // Update active symbols
-      this.activeSymbols = new Set(filteredPairs);
+      this.activeSymbols = new Set(selectedPairs);
       
-      logger.info(`Updated trading pairs: ${filteredPairs.length} pairs match criteria`);
+      logger.info(`Updated trading pairs: ${selectedPairs.length} pairs selected (${largeCapPairs.length} large-cap, ${midCapPairs.length} mid-cap)`);
+      logger.info(`Large-cap pairs: ${largeCapPairs.join(', ')}`);
+      logger.info(`Mid-cap pairs: ${midCapPairs.join(', ')}`);
       
       // Subscribe to channels for the active symbols
       if (this.isConnected) {
         this._subscribeToAllChannels();
       }
       
-      return filteredPairs;
+      return selectedPairs;
     } catch (error) {
       logger.error(`Failed to update trading pairs: ${error.message}`);
       throw error;
@@ -273,6 +297,12 @@ class MarketDataSocket extends EventEmitter {
       
       const { channel, instId } = arg;
       
+      // Only process data for our targeted trading pairs
+      const baseSymbol = instId.split('_')[0];
+      if (!this.activeSymbols.has(baseSymbol)) {
+        return; // Skip data for symbols we're not tracking
+      }
+      
       // Cache the data
       if (!this.cachedMarketData[instId]) {
         this.cachedMarketData[instId] = {};
@@ -413,12 +443,40 @@ class MarketDataSocket extends EventEmitter {
    * @param {Object} message - Client message
    */
   handleClientMessage(client, message) {
-    // Handle client subscription requests or commands
-    if (message && message.type === 'subscribe' && message.channels) {
-      logger.info(`Client subscription request: ${JSON.stringify(message.channels)}`);
+    try {
+      // Parse message if it's a string
+      const parsedMessage = typeof message === 'string' ? JSON.parse(message) : message;
       
-      // Send filtered data based on client subscription
-      // Implementation depends on specific app requirements
+      // Handle client subscription requests
+      if (parsedMessage && parsedMessage.type === 'subscribe') {
+        if (parsedMessage.symbols && Array.isArray(parsedMessage.symbols)) {
+          // Filter client's requested symbols to only include our active symbols
+          const filteredSymbols = parsedMessage.symbols.filter(symbol => 
+            this.activeSymbols.has(symbol.split('_')[0])
+          );
+          
+          logger.info(`Client subscription filtered: ${filteredSymbols.length}/${parsedMessage.symbols.length} symbols allowed`);
+          
+          // Send current data for the filtered symbols
+          if (filteredSymbols.length > 0) {
+            const filteredData = {};
+            
+            for (const symbol of filteredSymbols) {
+              if (this.cachedMarketData[symbol]) {
+                filteredData[symbol] = this.cachedMarketData[symbol];
+              }
+            }
+            
+            client.send(JSON.stringify({
+              type: 'subscription_data',
+              data: filteredData,
+              timestamp: Date.now()
+            }));
+          }
+        }
+      }
+    } catch (error) {
+      logger.error(`Error handling client message: ${error.message}`);
     }
   }
 
@@ -454,25 +512,30 @@ class MarketDataSocket extends EventEmitter {
         throw new Error('No market data available');
       }
       
+      // Filter for only our active trading pairs
+      const activeSymbolsWithUsdt = Array.from(this.activeSymbols).map(s => `${s}_USDT`);
+      
       // Format the data for client consumption
       const formattedData = {};
       
       for (const item of marketData) {
-        const symbol = item.symbol;
-        formattedData[symbol] = {
-          ticker: {
-            data: {
-              symbol: item.symbol,
-              last: item.last,
-              high24h: item.high24h,
-              low24h: item.low24h,
-              volume24h: item.volume24h,
-              change24h: item.change24h,
-              changePercent24h: item.changePercent24h
-            },
-            timestamp: Date.now()
-          }
-        };
+        // Only include data for our selected trading pairs
+        if (activeSymbolsWithUsdt.includes(item.symbol)) {
+          formattedData[item.symbol] = {
+            ticker: {
+              data: {
+                symbol: item.symbol,
+                last: item.last,
+                high24h: item.high24h,
+                low24h: item.low24h,
+                volume24h: item.volume24h,
+                change24h: item.change24h,
+                changePercent24h: item.changePercent24h
+              },
+              timestamp: Date.now()
+            }
+          };
+        }
       }
       
       // Cache the data for future requests
@@ -497,6 +560,14 @@ class MarketDataSocket extends EventEmitter {
         timestamp: Date.now()
       };
     }
+  }
+  
+  /**
+   * Get the list of active trading pairs
+   * @returns {Array} List of active trading pairs
+   */
+  getActiveTradingPairs() {
+    return Array.from(this.activeSymbols).map(symbol => `${symbol}_USDT`);
   }
 }
 

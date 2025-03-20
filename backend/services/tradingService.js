@@ -4,15 +4,20 @@ const logger = require('../utils/logger');
 
 /**
  * Service to handle trading operations, including AI signal filtering and execution
+ * Updated to focus on top 10 large-cap and 30 mid-cap USDT pairs
  */
 class TradingService {
   constructor() {
     this.isAutoTradingEnabled = false;
     this.activeSignals = new Map();
     this.tradingPairs = [];
+    this.largecapPairs = []; // Store top 10 large-cap pairs
+    this.midcapPairs = []; // Store top 30 mid-cap pairs
     this.mlApiUrl = process.env.ML_API_URL || 'http://localhost:8000';
     this.minProfitMargin = parseFloat(process.env.MIN_PROFIT_MARGIN || '0.005'); // 0.5%
-    this.maxPairsToWatch = parseInt(process.env.MAX_PAIRS_TO_WATCH || '20');
+    this.maxLargecapPairs = parseInt(process.env.MAX_LARGECAP_PAIRS || '10'); // Top 10 large-cap pairs
+    this.maxMidcapPairs = parseInt(process.env.MAX_MIDCAP_PAIRS || '30'); // Top 30 mid-cap pairs
+    this.coingeckoApiUrl = process.env.COINGECKO_API_URL || 'https://api.coingecko.com/api/v3';
     
     // Initialize the service
     this.initialize().catch(err => {
@@ -46,11 +51,9 @@ class TradingService {
       // No need to re-throw, just log the error
     }
   }
-
-  // Rest of the code remains the same...
   
   /**
-   * Update the list of trading pairs to monitor
+   * Update the list of trading pairs to monitor - now focusing on top 10 large-cap and 30 mid-cap pairs
    */
   async updateTradingPairs() {
     try {
@@ -68,23 +71,96 @@ class TradingService {
         return;
       }
       
-      // Filter for USDT pairs and sort by volume
+      // Filter for USDT pairs
       const usdtPairs = marketData
         .filter(pair => pair && pair.symbol && pair.symbol.endsWith('_UMCBL') && pair.symbol.includes('USDT'))
         .map(pair => ({
           symbol: pair.symbol.replace('_UMCBL', ''),
           volume24h: parseFloat(pair.volume24h || 0),
-          price: parseFloat(pair.last || 0)
-        }))
-        .sort((a, b) => b.volume24h - a.volume24h);
+          price: parseFloat(pair.last || 0),
+          marketCap: 0 // Will be updated with market cap data
+        }));
+
+      // Get market cap data from CoinGecko or service
+      await this.enrichWithMarketCapData(usdtPairs);
       
-      // Take top N pairs by volume
-      this.tradingPairs = usdtPairs.slice(0, this.maxPairsToWatch).map(pair => pair.symbol);
+      // Sort by market cap (descending)
+      const sortedByMarketCap = [...usdtPairs].sort((a, b) => b.marketCap - a.marketCap);
+      
+      // Select top large-cap pairs
+      this.largecapPairs = sortedByMarketCap
+        .slice(0, this.maxLargecapPairs)
+        .map(pair => pair.symbol);
+      
+      // Select mid-cap pairs (next 30 after the top 10)
+      this.midcapPairs = sortedByMarketCap
+        .slice(this.maxLargecapPairs, this.maxLargecapPairs + this.maxMidcapPairs)
+        .map(pair => pair.symbol);
+      
+      // Combine large-cap and mid-cap pairs
+      this.tradingPairs = [...this.largecapPairs, ...this.midcapPairs];
       
       logger.info(`Updated trading pairs: ${this.tradingPairs.length} pairs selected`);
+      logger.info(`Large-cap pairs (${this.largecapPairs.length}): ${this.largecapPairs.join(', ')}`);
+      logger.info(`Mid-cap pairs (${this.midcapPairs.length}): ${this.midcapPairs.join(', ')}`);
     } catch (error) {
       const errorMessage = error ? (error.message || String(error)) : 'Unknown error';
       logger.error(`Failed to update trading pairs: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Enrich trading pair data with market cap information
+   * @param {Array} pairs Array of trading pairs
+   */
+  async enrichWithMarketCapData(pairs) {
+    try {
+      // Fetch market cap data from CoinGecko
+      const response = await axios.get(`${this.coingeckoApiUrl}/coins/markets`, {
+        params: {
+          vs_currency: 'usdt',
+          order: 'market_cap_desc',
+          per_page: 250, // Fetch enough data to cover our pairs
+          page: 1,
+          sparkline: false
+        },
+        timeout: 10000 // 10 second timeout
+      });
+      
+      if (!response.data || !Array.isArray(response.data)) {
+        logger.warn('Invalid market cap data received from CoinGecko');
+        return;
+      }
+      
+      // Map CoinGecko data to our pairs
+      for (const pair of pairs) {
+        // Extract base currency from symbol (e.g., "BTCUSDT" -> "BTC")
+        const baseCurrency = pair.symbol.replace('USDT', '');
+        
+        // Find matching coin in CoinGecko data
+        const coinData = response.data.find(coin => 
+          coin.symbol && coin.symbol.toUpperCase() === baseCurrency.toUpperCase()
+        );
+        
+        if (coinData && coinData.market_cap) {
+          pair.marketCap = parseFloat(coinData.market_cap);
+        } else {
+          // If not found, use volume as fallback for ranking
+          pair.marketCap = pair.volume24h * pair.price;
+        }
+      }
+      
+      logger.info('Successfully enriched pairs with market cap data');
+    } catch (error) {
+      const errorMessage = error ? (error.message || String(error)) : 'Unknown error';
+      logger.error(`Failed to fetch market cap data: ${errorMessage}`);
+      
+      // Fallback: Use volume24h * price as estimate of market cap
+      for (const pair of pairs) {
+        pair.marketCap = pair.volume24h * pair.price;
+      }
+      
+      logger.info('Using volume-based estimates for market cap due to API error');
     }
   }
 
@@ -95,7 +171,7 @@ class TradingService {
    */
   async getTradeSignals(timeframe = '15m') {
     try {
-      // Request predictions from ML API
+      // Request predictions from ML API only for our filtered pairs
       const response = await axios.post(`${this.mlApiUrl}/predict`, {
         pairs: this.tradingPairs,
         timeframe
@@ -152,6 +228,9 @@ class TradingService {
     for (const signal of highConfidenceSignals) {
       if (!signal || !signal.symbol || !signal.side) continue;
       
+      // Skip signals for pairs not in our trading pairs list
+      if (!this.tradingPairs.includes(signal.symbol)) continue;
+      
       const key = `${signal.symbol}_${signal.side}`;
       
       // Skip if we already have this signal
@@ -162,7 +241,8 @@ class TradingService {
         ...signal,
         timeframe,
         timestamp: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + 20000).toISOString() // 20 seconds expiry
+        expiresAt: new Date(Date.now() + 20000).toISOString(), // 20 seconds expiry
+        pairType: this.largecapPairs.includes(signal.symbol) ? 'large-cap' : 'mid-cap'
       });
     }
     
@@ -224,12 +304,23 @@ class TradingService {
         return;
       }
       
+      // Prioritize large-cap pairs for trading
+      const prioritizedSignals = [...signals].sort((a, b) => {
+        // If one is large-cap and the other is mid-cap, prioritize large-cap
+        if (a.pairType === 'large-cap' && b.pairType !== 'large-cap') return -1;
+        if (a.pairType !== 'large-cap' && b.pairType === 'large-cap') return 1;
+        
+        // If both are the same type, sort by confidence
+        return b.confidence - a.confidence;
+      });
+      
       // Calculate trade size per signal
-      const maxSignals = Math.min(signals.length, 5); // Max 5 concurrent trades
+      const maxSignals = Math.min(prioritizedSignals.length, 5); // Max 5 concurrent trades
       const tradeSize = (availableBalance * 0.9) / maxSignals; // Use 90% of available balance
       
       // Execute trades for each signal
-      for (const signal of signals) {
+      for (let i = 0; i < maxSignals; i++) {
+        const signal = prioritizedSignals[i];
         if (!signal || !signal.symbol || !signal.side) continue;
         
         try {
@@ -243,7 +334,7 @@ class TradingService {
             signal.takeProfit
           );
           
-          logger.info(`Auto-executed trade: ${signal.side} ${signal.symbol}`);
+          logger.info(`Auto-executed trade: ${signal.side} ${signal.symbol} (${signal.pairType})`);
         } catch (error) {
           const errorMessage = error ? (error.message || String(error)) : 'Unknown error';
           logger.error(`Failed to auto-execute trade for ${signal.symbol}: ${errorMessage}`);
@@ -269,6 +360,11 @@ class TradingService {
   async executeTrade(symbol, side, quantity, price = null, stopLoss = null, takeProfit = null) {
     if (!symbol || !side || !quantity) {
       throw new Error('Missing required parameters for executeTrade');
+    }
+    
+    // Only allow trades for pairs in our filtered list
+    if (!this.tradingPairs.includes(symbol)) {
+      throw new Error(`Symbol ${symbol} is not in the filtered trading pairs list`);
     }
     
     try {
@@ -312,7 +408,8 @@ class TradingService {
         stopLoss,
         takeProfit,
         status: result.status || 'executed',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        pairType: this.largecapPairs.includes(symbol) ? 'large-cap' : 'mid-cap'
       };
     } catch (error) {
       const errorMessage = error ? (error.message || String(error)) : 'Unknown error';
@@ -421,7 +518,9 @@ class TradingService {
           autoTradingEnabled: this.isAutoTradingEnabled,
           accountBalance: 0,
           activePositionsCount: 0,
-          activeTradingPairs: this.tradingPairs.length,
+          largecapPairsCount: this.largecapPairs.length,
+          midcapPairsCount: this.midcapPairs.length,
+          totalTradingPairs: this.tradingPairs.length,
           serviceFunctional: false,
           timestamp: new Date().toISOString()
         };
@@ -437,7 +536,9 @@ class TradingService {
         autoTradingEnabled: this.isAutoTradingEnabled,
         accountBalance: usdtAccount ? parseFloat(usdtAccount.available || 0) : 0,
         activePositionsCount: activePositions && Array.isArray(activePositions) ? activePositions.length : 0,
-        activeTradingPairs: this.tradingPairs.length,
+        largecapPairsCount: this.largecapPairs.length,
+        midcapPairsCount: this.midcapPairs.length,
+        totalTradingPairs: this.tradingPairs.length,
         serviceFunctional: true,
         timestamp: new Date().toISOString()
       };
@@ -449,7 +550,9 @@ class TradingService {
         autoTradingEnabled: this.isAutoTradingEnabled,
         accountBalance: 0,
         activePositionsCount: 0,
-        activeTradingPairs: this.tradingPairs.length,
+        largecapPairsCount: this.largecapPairs.length,
+        midcapPairsCount: this.midcapPairs.length,
+        totalTradingPairs: this.tradingPairs.length,
         serviceFunctional: false,
         error: errorMessage,
         timestamp: new Date().toISOString()
@@ -461,9 +564,10 @@ class TradingService {
    * Get trade history
    * @param {number} limit Max number of records
    * @param {number} page Page number
+   * @param {string} pairType Optional filter for 'large-cap' or 'mid-cap' pairs
    * @returns {Promise<Object>} Trade history with pagination
    */
-  async getTradeHistory(limit = 20, page = 1) {
+  async getTradeHistory(limit = 20, page = 1, pairType = null) {
     try {
       // Check if bitgetService is properly initialized
       if (!bitgetService || typeof bitgetService.getTradeHistory !== 'function') {
@@ -480,7 +584,7 @@ class TradingService {
       }
       
       const offset = (page - 1) * limit;
-      const history = await bitgetService.getTradeHistory(limit * page);
+      let history = await bitgetService.getTradeHistory(limit * page);
       
       if (!history || !Array.isArray(history)) {
         return {
@@ -493,6 +597,27 @@ class TradingService {
           },
           serviceFunctional: true
         };
+      }
+      
+      // Filter history to include only our filtered trading pairs
+      history = history.filter(trade => {
+        if (!trade || !trade.symbol) return false;
+        
+        // Check if the trade symbol is in our filtered list
+        return this.tradingPairs.includes(trade.symbol);
+      });
+      
+      // Add pair type information
+      history = history.map(trade => ({
+        ...trade,
+        pairType: this.largecapPairs.includes(trade.symbol) ? 'large-cap' : 'mid-cap'
+      }));
+      
+      // Apply pair type filter if provided
+      if (pairType === 'large-cap') {
+        history = history.filter(trade => trade.pairType === 'large-cap');
+      } else if (pairType === 'mid-cap') {
+        history = history.filter(trade => trade.pairType === 'mid-cap');
       }
       
       // Apply pagination
@@ -523,6 +648,21 @@ class TradingService {
         serviceFunctional: false,
         error: errorMessage
       };
+    }
+  }
+
+  /**
+   * Get list of trading pairs
+   * @param {string} type Optional filter for 'large-cap' or 'mid-cap'
+   * @returns {Array} List of trading pairs
+   */
+  getTradingPairsList(type = null) {
+    if (type === 'large-cap') {
+      return [...this.largecapPairs];
+    } else if (type === 'mid-cap') {
+      return [...this.midcapPairs];
+    } else {
+      return [...this.tradingPairs];
     }
   }
 }

@@ -1,8 +1,19 @@
 import React, { useState } from 'react';
+import { filteredPairs } from '../services/api'; // Import filtered pairs list
 
 const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAutoTrading }) => {
   const [activeTab, setActiveTab] = useState('signals');
   const [countdownTimers, setCountdownTimers] = useState({});
+
+  // Filter signals to only include the 40 selected pairs
+  const filteredSignals = signals.filter(signal => 
+    filteredPairs.all.includes(signal.pair)
+  );
+
+  // Filter active trades to only include the 40 selected pairs
+  const filteredActiveTrades = activeTrades.filter(trade => 
+    filteredPairs.all.includes(trade.pair)
+  );
 
   const startCountdown = (signalId) => {
     // Initialize 20 second countdown
@@ -32,10 +43,13 @@ const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAuto
   };
 
   const handleManualExecute = (signal) => {
-    // Start the countdown timer
-    startCountdown(signal.id || `${signal.pair}-${signal.direction}-${Date.now()}`);
-    // Execute the trade
-    onExecuteTrade(signal, true);
+    // Only execute if it's one of our filtered pairs
+    if (filteredPairs.all.includes(signal.pair)) {
+      // Start the countdown timer
+      startCountdown(signal.id || `${signal.pair}-${signal.direction}-${Date.now()}`);
+      // Execute the trade
+      onExecuteTrade(signal, true);
+    }
   };
 
   const formatTime = (timestamp) => {
@@ -53,6 +67,12 @@ const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAuto
       month: 'short', 
       day: '2-digit'
     });
+  };
+
+  const isPairCategory = (pair) => {
+    if (filteredPairs.largeCap.includes(pair)) return 'Large Cap';
+    if (filteredPairs.midCap.includes(pair)) return 'Mid Cap';
+    return '';
   };
 
   return (
@@ -92,12 +112,12 @@ const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAuto
 
       {activeTab === 'signals' && (
         <div className="overflow-y-auto max-h-96">
-          {signals.length === 0 ? (
+          {filteredSignals.length === 0 ? (
             <p className="text-center text-gray-500 dark:text-gray-400 py-4">
               No trade signals available
             </p>
           ) : (
-            signals.map((signal, index) => (
+            filteredSignals.map((signal, index) => (
               <div
                 key={`${signal.pair}-${signal.direction}-${index}`}
                 className="border-b border-gray-200 dark:border-gray-700 py-3 flex items-center justify-between"
@@ -121,6 +141,9 @@ const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAuto
                     </span>
                     <span className="text-xs text-gray-500 dark:text-gray-400">
                       {formatTime(signal.time)}
+                    </span>
+                    <span className="text-xs px-2 py-1 rounded bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+                      {isPairCategory(signal.pair)}
                     </span>
                   </div>
                   <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -162,12 +185,12 @@ const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAuto
 
       {activeTab === 'active' && (
         <div className="overflow-y-auto max-h-96">
-          {activeTrades.filter(trade => trade.status !== 'closed').length === 0 ? (
+          {filteredActiveTrades.filter(trade => trade.status !== 'closed').length === 0 ? (
             <p className="text-center text-gray-500 dark:text-gray-400 py-4">
               No active trades
             </p>
           ) : (
-            activeTrades
+            filteredActiveTrades
               .filter(trade => trade.status !== 'closed')
               .map((trade) => (
                 <div
@@ -202,6 +225,9 @@ const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAuto
                       >
                         {trade.status.toUpperCase()}
                       </span>
+                      <span className="text-xs px-2 py-1 rounded bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+                        {isPairCategory(trade.pair)}
+                      </span>
                     </div>
                     <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                       <span>Entry: ${trade.entryPrice?.toFixed(2)}</span>
@@ -235,12 +261,12 @@ const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAuto
 
       {activeTab === 'history' && (
         <div className="overflow-y-auto max-h-96">
-          {activeTrades.filter(trade => trade.status === 'closed').length === 0 ? (
+          {filteredActiveTrades.filter(trade => trade.status === 'closed').length === 0 ? (
             <p className="text-center text-gray-500 dark:text-gray-400 py-4">
               No trade history
             </p>
           ) : (
-            activeTrades
+            filteredActiveTrades
               .filter(trade => trade.status === 'closed')
               .map((trade) => (
                 <div
@@ -272,6 +298,9 @@ const TradeList = ({ signals, activeTrades, onExecuteTrade, onCloseTrade, isAuto
                         }`}
                       >
                         {trade.profitLoss > 0 ? 'PROFIT' : 'LOSS'}
+                      </span>
+                      <span className="text-xs px-2 py-1 rounded bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300">
+                        {isPairCategory(trade.pair)}
                       </span>
                     </div>
                     <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">

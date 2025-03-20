@@ -31,6 +31,36 @@ class TradingPredictor:
 
         # Define lookback period for feature generation
         self.lookback = 30  # Number of periods to consider for technical indicators
+        
+        # Define the filtered pairs (only top 10 large-cap and 30 mid-cap USDT pairs)
+        self.allowed_pairs = self._get_allowed_pairs()
+        logger.info(f"TradingPredictor initialized with {len(self.allowed_pairs)} filtered trading pairs")
+
+    def _get_allowed_pairs(self):
+        """
+        Get the list of allowed trading pairs (top 10 large-cap and 30 mid-cap USDT pairs)
+        
+        Returns:
+            List of allowed trading pairs
+        """
+        # This should match the list from bitgetService.js
+        # Top 10 large-cap USDT pairs
+        large_cap_pairs = [
+            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", 
+            "ADAUSDT", "DOGEUSDT", "DOTUSDT", "AVAXUSDT", "LINKUSDT"
+        ]
+        
+        # Top 30 mid-cap USDT pairs
+        mid_cap_pairs = [
+            "MATICUSDT", "UNIUSDT", "LDOUSDT", "ATOMUSDT", "FILUSDT",
+            "NEARUSDT", "APTUSDT", "ICPUSDT", "ETCUSDT", "LTCUSDT", 
+            "INJUSDT", "SUIUSDT", "STXUSDT", "AAVEUSDT", "OPUSDT",
+            "ARBUSDT", "GMTUSDT", "1000SHIBUSDT", "AXSUSDT", "EOSUSDT",
+            "IMXUSDT", "FLOWUSDT", "SNXUSDT", "RNDRUSDT", "LRCUSDT",
+            "COMPUSDT", "FTMUSDT", "SANDUSDT", "MANAUSDT", "APEUSDT"
+        ]
+        
+        return large_cap_pairs + mid_cap_pairs
 
     def preprocess_data(self, market_data):
         """
@@ -46,6 +76,12 @@ class TradingPredictor:
             # Ensure market_data is a pandas DataFrame
             if not isinstance(market_data, pd.DataFrame):
                 market_data = pd.DataFrame(market_data)
+            
+            # Get symbol from market data if available
+            symbol = market_data.get('symbol', None)
+            if symbol is not None and isinstance(symbol, str) and symbol not in self.allowed_pairs:
+                logger.warning(f"Skipping prediction for non-filtered pair: {symbol}")
+                return None, None
             
             # Ensure we have the required columns
             required_columns = ['open', 'high', 'low', 'close', 'volume']
@@ -176,11 +212,21 @@ class TradingPredictor:
             market_data: DataFrame with OHLCV data
             
         Returns:
-            Dictionary with prediction results
+            Dictionary with prediction results or None if not in allowed pairs
         """
         try:
+            # Get symbol information from market data
+            symbol = market_data.get('symbol', None)
+            if isinstance(symbol, str) and symbol not in self.allowed_pairs:
+                logger.info(f"Skipping prediction for non-filtered pair: {symbol}")
+                return None
+            
             # Preprocess the data
             X, processed_data = self.preprocess_data(market_data)
+            
+            # If preprocessing returned None (not in allowed pairs), skip prediction
+            if X is None or processed_data is None:
+                return None
             
             # Make prediction
             predictions = self.model.predict(X)
@@ -268,6 +314,11 @@ class TradingPredictor:
         Returns:
             Boolean indicating whether the signal should be executed
         """
+        # First check if signal is for an allowed pair
+        if signal['symbol'] not in self.allowed_pairs:
+            logger.info(f"Filtered out signal for non-filtered pair: {signal['symbol']}")
+            return False
+        
         # Implement duplicate checking logic
         if recent_signals:
             # Check for duplicate signals in the same timeframe

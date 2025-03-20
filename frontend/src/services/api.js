@@ -35,6 +35,27 @@ apiClient.interceptors.response.use(
   }
 );
 
+// List of filtered pairs (10 large-cap and 30 mid-cap USDT pairs)
+export const filteredPairs = {
+  largeCap: [
+    'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT', 'SOLUSDT', 
+    'ADAUSDT', 'DOGEUSDT', 'TRXUSDT', 'AVAXUSDT', 'DOTUSDT'
+  ],
+  midCap: [
+    'LINKUSDT', 'MATICUSDT', 'UNIUSDT', 'LTCUSDT', 'ATOMUSDT',
+    'ETCUSDT', 'APTUSDT', 'FILUSDT', 'NEARUSDT', 'INJUSDT',
+    'ICPUSDT', 'FTMUSDT', 'SANDUSDT', 'FLRUSDT', 'APEUSDT',
+    'AAVEUSDT', 'XLMUSDT', 'ALGOUSDT', 'AXSUSDT', 'OPUSDT',
+    'CAKEUSDT', 'GRTUSDT', 'MANAUSDT', 'ROSEUSDT', 'RUNEUSDT', 
+    'EGLDUSDT', 'MKRUSDT', 'COMPUSDT', 'SUSHIUSDT', 'SNXUSDT'
+  ],
+  // All filtered pairs combined
+  all: []
+};
+
+// Combine large-cap and mid-cap pairs for easier access
+filteredPairs.all = [...filteredPairs.largeCap, ...filteredPairs.midCap];
+
 // API service methods
 export const api = {
   // Auth endpoints
@@ -54,10 +75,34 @@ export const api = {
   // Specific trading methods
   getTrades: () => apiClient.get('/trades'),
   getStats: () => apiClient.get('/stats'),
-  getPairs: () => apiClient.get('/pairs'),
+  
+  // Get filtered trading pairs
+  getPairs: () => {
+    // Return only the filtered pairs from our predefined list
+    return Promise.resolve({ 
+      data: {
+        largeCap: filteredPairs.largeCap,
+        midCap: filteredPairs.midCap,
+        all: filteredPairs.all
+      }
+    });
+  },
+  
+  // Get specific pairs by category
+  getLargeCapPairs: () => Promise.resolve({ data: filteredPairs.largeCap }),
+  getMidCapPairs: () => Promise.resolve({ data: filteredPairs.midCap }),
 
-  // ✅ Fallback API for market data
-  getFallbackMarketData: () => apiClient.get('/market/fallback'),
+  // ✅ Fallback API for market data (filter to only include our 40 pairs)
+  getFallbackMarketData: () => 
+    apiClient.get('/market/fallback').then(response => {
+      // Filter the response to only include our 40 selected pairs
+      if (response.data && Array.isArray(response.data)) {
+        response.data = response.data.filter(item => 
+          filteredPairs.all.includes(item.pair || item.symbol)
+        );
+      }
+      return response;
+    }),
   
   // WebSocket connection
   subscribeToMarketData: (callback) => {
@@ -71,12 +116,31 @@ export const api = {
       if (token) {
         socket.send(JSON.stringify({ type: 'auth', token }));
       }
+      
+      // Subscribe only to our filtered pairs
+      socket.send(JSON.stringify({ 
+        type: 'subscribe', 
+        pairs: filteredPairs.all 
+      }));
     };
     
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        callback(data);
+        
+        // Only process data for our filtered pairs
+        if (data.pair && filteredPairs.all.includes(data.pair)) {
+          callback(data);
+        } else if (data.type === 'signals' && Array.isArray(data.signals)) {
+          // For signal arrays, filter to include only our desired pairs
+          data.signals = data.signals.filter(signal => 
+            filteredPairs.all.includes(signal.pair)
+          );
+          callback(data);
+        } else {
+          // For other data types, pass through without filtering
+          callback(data);
+        }
       } catch (error) {
         console.error('Error parsing WebSocket message:', error);
       }
