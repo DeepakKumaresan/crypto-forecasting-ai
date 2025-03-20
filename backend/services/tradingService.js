@@ -16,7 +16,6 @@ class TradingService {
     
     // Initialize the service
     this.initialize().catch(err => {
-      // Fix: Don't try to access err.error, handle the error object directly
       logger.error(`Failed to initialize trading service: ${err ? (err.message || String(err)) : 'Unknown error'}`);
     });
   }
