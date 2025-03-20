@@ -31,12 +31,8 @@ class TradingService {
       
       logger.info('Trading service initialized successfully');
     } catch (error) {
-      // Fix for the error handling issue
-      if (error && typeof error === 'object') {
-        logger.error(`Failed to initialize trading service: ${error.message || 'Unknown error'}`);
-      } else {
-        logger.error(`Failed to initialize trading service: ${error || 'Unknown error'}`);
-      }
+      // Fixed error handling
+      logger.error(`Failed to initialize trading service: ${error ? error.message || String(error) : 'Unknown error'}`);
     }
   }
 
@@ -74,11 +70,7 @@ class TradingService {
       
       logger.info(`Updated trading pairs: ${this.tradingPairs.length} pairs selected`);
     } catch (error) {
-      if (error && typeof error === 'object') {
-        logger.error(`Failed to update trading pairs: ${error.message || 'Unknown error'}`);
-      } else {
-        logger.error(`Failed to update trading pairs: ${error || 'Unknown error'}`);
-      }
+      logger.error(`Failed to update trading pairs: ${error ? error.message || String(error) : 'Unknown error'}`);
     }
   }
 
@@ -115,11 +107,7 @@ class TradingService {
       
       return filteredSignals;
     } catch (error) {
-      if (error && typeof error === 'object') {
-        logger.error(`Failed to get trade signals: ${error.message || 'Unknown error'}`);
-      } else {
-        logger.error(`Failed to get trade signals: ${error || 'Unknown error'}`);
-      }
+      logger.error(`Failed to get trade signals: ${error ? error.message || String(error) : 'Unknown error'}`);
       return [];
     }
   }
@@ -239,19 +227,11 @@ class TradingService {
           
           logger.info(`Auto-executed trade: ${signal.side} ${signal.symbol}`);
         } catch (error) {
-          if (error && typeof error === 'object') {
-            logger.error(`Failed to auto-execute trade for ${signal.symbol}: ${error.message || 'Unknown error'}`);
-          } else {
-            logger.error(`Failed to auto-execute trade for ${signal.symbol}: ${error || 'Unknown error'}`);
-          }
+          logger.error(`Failed to auto-execute trade for ${signal.symbol}: ${error ? error.message || String(error) : 'Unknown error'}`);
         }
       }
     } catch (error) {
-      if (error && typeof error === 'object') {
-        logger.error(`Error in auto-trading execution: ${error.message || 'Unknown error'}`);
-      } else {
-        logger.error(`Error in auto-trading execution: ${error || 'Unknown error'}`);
-      }
+      logger.error(`Error in auto-trading execution: ${error ? error.message || String(error) : 'Unknown error'}`);
     }
   }
 
@@ -314,11 +294,7 @@ class TradingService {
         timestamp: new Date().toISOString()
       };
     } catch (error) {
-      if (error && typeof error === 'object') {
-        logger.error(`Failed to execute trade: ${error.message || 'Unknown error'}`);
-      } else {
-        logger.error(`Failed to execute trade: ${error || 'Unknown error'}`);
-      }
+      logger.error(`Failed to execute trade: ${error ? error.message || String(error) : 'Unknown error'}`);
       throw error;
     }
   }
@@ -353,11 +329,7 @@ class TradingService {
       
       return parseFloat(pair.last);
     } catch (error) {
-      if (error && typeof error === 'object') {
-        logger.error(`Failed to get current price for ${symbol}: ${error.message || 'Unknown error'}`);
-      } else {
-        logger.error(`Failed to get current price for ${symbol}: ${error || 'Unknown error'}`);
-      }
+      logger.error(`Failed to get current price for ${symbol}: ${error ? error.message || String(error) : 'Unknown error'}`);
       throw error;
     }
   }
@@ -447,11 +419,7 @@ class TradingService {
         timestamp: new Date().toISOString()
       };
     } catch (error) {
-      if (error && typeof error === 'object') {
-        logger.error(`Failed to get trading status: ${error.message || 'Unknown error'}`);
-      } else {
-        logger.error(`Failed to get trading status: ${error || 'Unknown error'}`);
-      }
+      logger.error(`Failed to get trading status: ${error ? error.message || String(error) : 'Unknown error'}`);
       
       return {
         autoTradingEnabled: this.isAutoTradingEnabled,
@@ -459,7 +427,7 @@ class TradingService {
         activePositionsCount: 0,
         activeTradingPairs: this.tradingPairs.length,
         serviceFunctional: false,
-        error: (error && typeof error === 'object') ? error.message : 'Unknown error',
+        error: error ? error.message || String(error) : 'Unknown error',
         timestamp: new Date().toISOString()
       };
     }
@@ -517,11 +485,7 @@ class TradingService {
         serviceFunctional: true
       };
     } catch (error) {
-      if (error && typeof error === 'object') {
-        logger.error(`Failed to get trade history: ${error.message || 'Unknown error'}`);
-      } else {
-        logger.error(`Failed to get trade history: ${error || 'Unknown error'}`);
-      }
+      logger.error(`Failed to get trade history: ${error ? error.message || String(error) : 'Unknown error'}`);
       
       return {
         trades: [],
@@ -532,7 +496,7 @@ class TradingService {
           pages: 0
         },
         serviceFunctional: false,
-        error: (error && typeof error === 'object') ? error.message : 'Unknown error'
+        error: error ? error.message || String(error) : 'Unknown error'
       };
     }
   }
