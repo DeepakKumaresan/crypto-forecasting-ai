@@ -16,7 +16,7 @@ class TradingService {
     
     // Initialize the service
     this.initialize().catch(err => {
-      logger.error(`Failed to initialize trading service: ${err ? err.message : 'Unknown error'}`);
+      logger.error(`Failed to initialize trading service: ${err && err.message ? err.message : 'Unknown error'}`);
     });
   }
 
@@ -31,7 +31,7 @@ class TradingService {
       // Start periodic updates
       setInterval(() => {
         this.updateTradingPairs().catch(err => {
-          logger.error(`Periodic trading pairs update failed: ${err ? err.message : 'Unknown error'}`);
+          logger.error(`Periodic trading pairs update failed: ${err && err.message ? err.message : 'Unknown error'}`);
         });
       }, 3600000); // Update every hour
       
@@ -91,6 +91,12 @@ class TradingService {
    */
   async getTradeSignals(timeframe = '15m') {
     try {
+      // Check if the ML API URL is set
+      if (!this.mlApiUrl) {
+        logger.warn('ML API URL not set, skipping trade signals');
+        return [];
+      }
+      
       // Request predictions from ML API
       const response = await axios.post(`${this.mlApiUrl}/predict`, {
         pairs: this.tradingPairs,
@@ -113,7 +119,7 @@ class TradingService {
       // If auto-trading is enabled, execute trades
       if (this.isAutoTradingEnabled) {
         await this.executeAutoTrades(filteredSignals).catch(err => {
-          logger.error(`Auto-trading execution failed: ${err ? err.message : 'Unknown error'}`);
+          logger.error(`Auto-trading execution failed: ${err && err.message ? err.message : 'Unknown error'}`);
         });
       }
       
@@ -422,8 +428,21 @@ class TradingService {
         };
       }
       
-      const accountInfo = await bitgetService.getAccountBalance();
-      const activePositions = await bitgetService.getPositions();
+      // Wrap in try/catch to handle possible errors in service calls
+      let accountInfo = [];
+      let activePositions = [];
+      
+      try {
+        accountInfo = await bitgetService.getAccountBalance();
+      } catch (error) {
+        logger.warn(`Failed to get account balance: ${error && error.message ? error.message : 'Unknown error'}`);
+      }
+      
+      try {
+        activePositions = await bitgetService.getPositions();
+      } catch (error) {
+        logger.warn(`Failed to get positions: ${error && error.message ? error.message : 'Unknown error'}`);
+      }
       
       const usdtAccount = accountInfo && Array.isArray(accountInfo) ? 
         accountInfo.find(acc => acc && acc.marginCoin === 'USDT') : null;
@@ -475,7 +494,13 @@ class TradingService {
       }
       
       const offset = (page - 1) * limit;
-      const history = await bitgetService.getTradeHistory(limit * page);
+      let history = [];
+      
+      try {
+        history = await bitgetService.getTradeHistory(limit * page);
+      } catch (error) {
+        logger.warn(`Failed to get trade history: ${error && error.message ? error.message : 'Unknown error'}`);
+      }
       
       if (!history || !Array.isArray(history)) {
         return {
