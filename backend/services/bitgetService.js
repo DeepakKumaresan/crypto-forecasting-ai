@@ -80,7 +80,8 @@ class BitgetService {
    */
   async getMarketData() {
     try {
-      const response = await this.request('GET', '/api/mix/v1/market/tickers?productType=USDT-FUTURES');
+      // Updated endpoint based on the latest Bitget API documentation
+      const response = await this.request('GET', '/api/mix/v1/market/tickers?productType=UMCBL');
       return response.data;
     } catch (error) {
       logger.error(`Failed to get market data: ${error.message}`);
@@ -188,7 +189,7 @@ class BitgetService {
     try {
       const endpoint = symbol 
         ? `/api/mix/v1/position/singlePosition?symbol=${symbol}_UMCBL`
-        : '/api/mix/v1/position/allPosition?productType=USDT-FUTURES';
+        : '/api/mix/v1/position/allPosition?productType=UMCBL';
       
       const response = await this.request('GET', endpoint);
       return response.data;
@@ -204,7 +205,7 @@ class BitgetService {
    */
   async getAccountBalance() {
     try {
-      const response = await this.request('GET', '/api/mix/v1/account/accounts?productType=USDT-FUTURES');
+      const response = await this.request('GET', '/api/mix/v1/account/accounts?productType=UMCBL');
       return response.data;
     } catch (error) {
       logger.error(`Failed to get account balance: ${error.message}`);
@@ -221,7 +222,7 @@ class BitgetService {
    */
   async getTradeHistory(limit = 100, startTime = null, endTime = null) {
     try {
-      let endpoint = `/api/mix/v1/order/history?productType=USDT-FUTURES&limit=${limit}`;
+      let endpoint = `/api/mix/v1/order/history?productType=UMCBL&limit=${limit}`;
       
       if (startTime) {
         endpoint += `&startTime=${startTime}`;
