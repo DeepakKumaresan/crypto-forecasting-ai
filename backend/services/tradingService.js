@@ -31,7 +31,12 @@ class TradingService {
       
       logger.info('Trading service initialized successfully');
     } catch (error) {
-      logger.error(`Failed to initialize trading service: ${error.message}`);
+      // Fix for the error handling issue
+      if (error && typeof error === 'object') {
+        logger.error(`Failed to initialize trading service: ${error.message || 'Unknown error'}`);
+      } else {
+        logger.error(`Failed to initialize trading service: ${error || 'Unknown error'}`);
+      }
     }
   }
 
@@ -40,15 +45,27 @@ class TradingService {
    */
   async updateTradingPairs() {
     try {
+      // Check if bitgetService is properly initialized
+      if (!bitgetService || typeof bitgetService.getMarketData !== 'function') {
+        logger.warn('Bitget service not initialized properly, skipping updateTradingPairs');
+        return;
+      }
+
       const marketData = await bitgetService.getMarketData();
+      
+      // Check if marketData is valid
+      if (!marketData || !Array.isArray(marketData)) {
+        logger.warn('Invalid market data received, skipping update');
+        return;
+      }
       
       // Filter for USDT pairs and sort by volume
       const usdtPairs = marketData
-        .filter(pair => pair.symbol.endsWith('_UMCBL') && pair.symbol.includes('USDT'))
+        .filter(pair => pair && pair.symbol && pair.symbol.endsWith('_UMCBL') && pair.symbol.includes('USDT'))
         .map(pair => ({
           symbol: pair.symbol.replace('_UMCBL', ''),
-          volume24h: parseFloat(pair.volume24h),
-          price: parseFloat(pair.last)
+          volume24h: parseFloat(pair.volume24h || 0),
+          price: parseFloat(pair.last || 0)
         }))
         .sort((a, b) => b.volume24h - a.volume24h);
       
@@ -57,7 +74,11 @@ class TradingService {
       
       logger.info(`Updated trading pairs: ${this.tradingPairs.length} pairs selected`);
     } catch (error) {
-      logger.error(`Failed to update trading pairs: ${error.message}`);
+      if (error && typeof error === 'object') {
+        logger.error(`Failed to update trading pairs: ${error.message || 'Unknown error'}`);
+      } else {
+        logger.error(`Failed to update trading pairs: ${error || 'Unknown error'}`);
+      }
     }
   }
 
@@ -74,7 +95,12 @@ class TradingService {
         timeframe
       });
       
-      const signals = response.data.predictions;
+      const signals = response.data && response.data.predictions;
+      
+      if (!signals || !Array.isArray(signals)) {
+        logger.warn('Invalid signals data received from ML API');
+        return [];
+      }
       
       // Filter signals based on AI confidence and remove duplicates
       const filteredSignals = this.filterSignals(signals, timeframe);
@@ -89,8 +115,12 @@ class TradingService {
       
       return filteredSignals;
     } catch (error) {
-      logger.error(`Failed to get trade signals: ${error.message}`);
-      throw error;
+      if (error && typeof error === 'object') {
+        logger.error(`Failed to get trade signals: ${error.message || 'Unknown error'}`);
+      } else {
+        logger.error(`Failed to get trade signals: ${error || 'Unknown error'}`);
+      }
+      return [];
     }
   }
 
@@ -101,8 +131,11 @@ class TradingService {
    * @returns {Array} Filtered signals
    */
   filterSignals(signals, timeframe) {
+    if (!signals || !Array.isArray(signals)) return [];
+    
     // Filter signals with high confidence
     const highConfidenceSignals = signals.filter(signal => 
+      signal && typeof signal === 'object' && 
       signal.confidence >= parseFloat(process.env.MIN_SIGNAL_CONFIDENCE || '0.7')
     );
     
@@ -111,6 +144,8 @@ class TradingService {
     const sigKeys = new Set();
     
     for (const signal of highConfidenceSignals) {
+      if (!signal || !signal.symbol || !signal.side) continue;
+      
       const key = `${signal.symbol}_${signal.side}`;
       
       // Skip if we already have this signal
@@ -134,6 +169,8 @@ class TradingService {
    * @param {string} timeframe Timeframe for signals
    */
   updateActiveSignals(signals, timeframe) {
+    if (!signals || !Array.isArray(signals)) return;
+    
     // Remove expired signals
     const now = Date.now();
     for (const [key, signal] of this.activeSignals.entries()) {
@@ -144,6 +181,8 @@ class TradingService {
     
     // Add new signals
     for (const signal of signals) {
+      if (!signal || !signal.symbol || !signal.side) continue;
+      
       const key = `${signal.symbol}_${signal.side}_${timeframe}`;
       this.activeSignals.set(key, signal);
     }
@@ -154,10 +193,25 @@ class TradingService {
    * @param {Array} signals Trade signals
    */
   async executeAutoTrades(signals) {
+    if (!signals || !Array.isArray(signals) || signals.length === 0) return;
+    
     try {
+      // Check if bitgetService is properly initialized
+      if (!bitgetService || typeof bitgetService.getAccountBalance !== 'function') {
+        logger.warn('Bitget service not initialized properly, skipping auto-trades');
+        return;
+      }
+      
       // Get account balance
       const accountInfo = await bitgetService.getAccountBalance();
-      const availableBalance = accountInfo.find(acc => acc.marginCoin === 'USDT')?.available || 0;
+      
+      if (!accountInfo || !Array.isArray(accountInfo)) {
+        logger.warn('Invalid account info received, skipping auto-trades');
+        return;
+      }
+      
+      const usdtAccount = accountInfo.find(acc => acc && acc.marginCoin === 'USDT');
+      const availableBalance = usdtAccount ? parseFloat(usdtAccount.available || 0) : 0;
       
       if (availableBalance <= 0) {
         logger.warn('Insufficient balance for auto-trading');
@@ -170,6 +224,8 @@ class TradingService {
       
       // Execute trades for each signal
       for (const signal of signals) {
+        if (!signal || !signal.symbol || !signal.side) continue;
+        
         try {
           // Execute the trade
           await this.executeTrade(
@@ -183,11 +239,19 @@ class TradingService {
           
           logger.info(`Auto-executed trade: ${signal.side} ${signal.symbol}`);
         } catch (error) {
-          logger.error(`Failed to auto-execute trade for ${signal.symbol}: ${error.message}`);
+          if (error && typeof error === 'object') {
+            logger.error(`Failed to auto-execute trade for ${signal.symbol}: ${error.message || 'Unknown error'}`);
+          } else {
+            logger.error(`Failed to auto-execute trade for ${signal.symbol}: ${error || 'Unknown error'}`);
+          }
         }
       }
     } catch (error) {
-      logger.error(`Error in auto-trading execution: ${error.message}`);
+      if (error && typeof error === 'object') {
+        logger.error(`Error in auto-trading execution: ${error.message || 'Unknown error'}`);
+      } else {
+        logger.error(`Error in auto-trading execution: ${error || 'Unknown error'}`);
+      }
     }
   }
 
@@ -202,6 +266,10 @@ class TradingService {
    * @returns {Promise<Object>} Trade result
    */
   async executeTrade(symbol, side, quantity, price = null, stopLoss = null, takeProfit = null) {
+    if (!symbol || !side || !quantity) {
+      throw new Error('Missing required parameters for executeTrade');
+    }
+    
     try {
       // If stopLoss or takeProfit are not provided, calculate them
       const currentPrice = price || await this.getCurrentPrice(symbol);
@@ -212,6 +280,11 @@ class TradingService {
       
       if (!takeProfit) {
         takeProfit = this.calculateTakeProfit(currentPrice, side);
+      }
+      
+      // Check if bitgetService is properly initialized
+      if (!bitgetService || typeof bitgetService.placeOrder !== 'function') {
+        throw new Error('Bitget service not initialized properly');
       }
       
       // Execute the trade
@@ -225,6 +298,10 @@ class TradingService {
         takeProfit
       );
       
+      if (!result) {
+        throw new Error('No result received from placeOrder');
+      }
+      
       return {
         orderId: result.orderId,
         symbol,
@@ -237,7 +314,11 @@ class TradingService {
         timestamp: new Date().toISOString()
       };
     } catch (error) {
-      logger.error(`Failed to execute trade: ${error.message}`);
+      if (error && typeof error === 'object') {
+        logger.error(`Failed to execute trade: ${error.message || 'Unknown error'}`);
+      } else {
+        logger.error(`Failed to execute trade: ${error || 'Unknown error'}`);
+      }
       throw error;
     }
   }
@@ -248,9 +329,23 @@ class TradingService {
    * @returns {Promise<number>} Current price
    */
   async getCurrentPrice(symbol) {
+    if (!symbol) {
+      throw new Error('Symbol is required for getCurrentPrice');
+    }
+    
     try {
+      // Check if bitgetService is properly initialized
+      if (!bitgetService || typeof bitgetService.getMarketData !== 'function') {
+        throw new Error('Bitget service not initialized properly');
+      }
+      
       const marketData = await bitgetService.getMarketData();
-      const pair = marketData.find(p => p.symbol === `${symbol}_UMCBL`);
+      
+      if (!marketData || !Array.isArray(marketData)) {
+        throw new Error('Invalid market data received');
+      }
+      
+      const pair = marketData.find(p => p && p.symbol === `${symbol}_UMCBL`);
       
       if (!pair) {
         throw new Error(`Symbol ${symbol} not found in market data`);
@@ -258,7 +353,11 @@ class TradingService {
       
       return parseFloat(pair.last);
     } catch (error) {
-      logger.error(`Failed to get current price for ${symbol}: ${error.message}`);
+      if (error && typeof error === 'object') {
+        logger.error(`Failed to get current price for ${symbol}: ${error.message || 'Unknown error'}`);
+      } else {
+        logger.error(`Failed to get current price for ${symbol}: ${error || 'Unknown error'}`);
+      }
       throw error;
     }
   }
@@ -270,6 +369,11 @@ class TradingService {
    * @returns {number} Stop loss price
    */
   calculateStopLoss(price, side) {
+    if (!price || typeof price !== 'number' || !side) {
+      logger.warn('Invalid parameters for calculateStopLoss');
+      return null;
+    }
+    
     const stopLossPercentage = parseFloat(process.env.STOP_LOSS_PERCENTAGE || '0.02'); // 2%
     return side.toLowerCase() === 'buy' 
       ? price * (1 - stopLossPercentage)
@@ -283,6 +387,11 @@ class TradingService {
    * @returns {number} Take profit price
    */
   calculateTakeProfit(price, side) {
+    if (!price || typeof price !== 'number' || !side) {
+      logger.warn('Invalid parameters for calculateTakeProfit');
+      return null;
+    }
+    
     const takeProfitPercentage = parseFloat(process.env.TAKE_PROFIT_PERCENTAGE || '0.05'); // 5%
     return side.toLowerCase() === 'buy' 
       ? price * (1 + takeProfitPercentage)
@@ -295,9 +404,9 @@ class TradingService {
    * @returns {Object} Current trading status
    */
   async toggleAutoTrading(enabled) {
-    this.isAutoTradingEnabled = enabled;
+    this.isAutoTradingEnabled = !!enabled;
     
-    logger.info(`Auto-trading ${enabled ? 'enabled' : 'disabled'}`);
+    logger.info(`Auto-trading ${this.isAutoTradingEnabled ? 'enabled' : 'disabled'}`);
     
     return {
       autoTradingEnabled: this.isAutoTradingEnabled,
@@ -311,19 +420,48 @@ class TradingService {
    */
   async getTradingStatus() {
     try {
+      // Check if bitgetService is properly initialized
+      if (!bitgetService || typeof bitgetService.getAccountBalance !== 'function' || typeof bitgetService.getPositions !== 'function') {
+        return {
+          autoTradingEnabled: this.isAutoTradingEnabled,
+          accountBalance: 0,
+          activePositionsCount: 0,
+          activeTradingPairs: this.tradingPairs.length,
+          serviceFunctional: false,
+          timestamp: new Date().toISOString()
+        };
+      }
+      
       const accountInfo = await bitgetService.getAccountBalance();
       const activePositions = await bitgetService.getPositions();
       
+      const usdtAccount = accountInfo && Array.isArray(accountInfo) ? 
+        accountInfo.find(acc => acc && acc.marginCoin === 'USDT') : null;
+      
       return {
         autoTradingEnabled: this.isAutoTradingEnabled,
-        accountBalance: accountInfo.find(acc => acc.marginCoin === 'USDT')?.available || 0,
-        activePositionsCount: activePositions.length,
+        accountBalance: usdtAccount ? parseFloat(usdtAccount.available || 0) : 0,
+        activePositionsCount: activePositions && Array.isArray(activePositions) ? activePositions.length : 0,
         activeTradingPairs: this.tradingPairs.length,
+        serviceFunctional: true,
         timestamp: new Date().toISOString()
       };
     } catch (error) {
-      logger.error(`Failed to get trading status: ${error.message}`);
-      throw error;
+      if (error && typeof error === 'object') {
+        logger.error(`Failed to get trading status: ${error.message || 'Unknown error'}`);
+      } else {
+        logger.error(`Failed to get trading status: ${error || 'Unknown error'}`);
+      }
+      
+      return {
+        autoTradingEnabled: this.isAutoTradingEnabled,
+        accountBalance: 0,
+        activePositionsCount: 0,
+        activeTradingPairs: this.tradingPairs.length,
+        serviceFunctional: false,
+        error: (error && typeof error === 'object') ? error.message : 'Unknown error',
+        timestamp: new Date().toISOString()
+      };
     }
   }
 
@@ -335,8 +473,35 @@ class TradingService {
    */
   async getTradeHistory(limit = 20, page = 1) {
     try {
+      // Check if bitgetService is properly initialized
+      if (!bitgetService || typeof bitgetService.getTradeHistory !== 'function') {
+        return {
+          trades: [],
+          pagination: {
+            total: 0,
+            page,
+            limit,
+            pages: 0
+          },
+          serviceFunctional: false
+        };
+      }
+      
       const offset = (page - 1) * limit;
       const history = await bitgetService.getTradeHistory(limit * page);
+      
+      if (!history || !Array.isArray(history)) {
+        return {
+          trades: [],
+          pagination: {
+            total: 0,
+            page,
+            limit,
+            pages: 0
+          },
+          serviceFunctional: true
+        };
+      }
       
       // Apply pagination
       const paginatedHistory = history.slice(offset, offset + limit);
@@ -348,11 +513,27 @@ class TradingService {
           page,
           limit,
           pages: Math.ceil(history.length / limit)
-        }
+        },
+        serviceFunctional: true
       };
     } catch (error) {
-      logger.error(`Failed to get trade history: ${error.message}`);
-      throw error;
+      if (error && typeof error === 'object') {
+        logger.error(`Failed to get trade history: ${error.message || 'Unknown error'}`);
+      } else {
+        logger.error(`Failed to get trade history: ${error || 'Unknown error'}`);
+      }
+      
+      return {
+        trades: [],
+        pagination: {
+          total: 0,
+          page,
+          limit,
+          pages: 0
+        },
+        serviceFunctional: false,
+        error: (error && typeof error === 'object') ? error.message : 'Unknown error'
+      };
     }
   }
 }
