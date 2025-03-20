@@ -1,96 +1,47 @@
 /**
- * Centralized logging utility
- * Configures Winston logger with appropriate transports and log levels
+ * Logger utility for consistent application logging
  */
-
 const winston = require('winston');
-const { createLogger, format, transports } = winston;
-const { combine, timestamp, printf, colorize, json } = format;
+const path = require('path');
 
-// Define log levels
-const levels = {
-  error: 0,
-  warn: 1,
-  info: 2,
-  http: 3,
-  debug: 4
-};
-
-// Define level based on environment
-const level = () => {
-  const env = process.env.NODE_ENV || 'development';
-  return env === 'development' ? 'debug' : 'info';
-};
-
-// Define custom format for console output
-const consoleFormat = combine(
-  colorize({ all: true }),
-  timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-  printf(({ timestamp, level, message, ...metadata }) => {
-    let metaStr = '';
-    if (Object.keys(metadata).length > 0 && metadata.constructor === Object) {
-      metaStr = JSON.stringify(metadata, null, 2);
-    }
-    return `[${timestamp}] ${level}: ${message} ${metaStr}`;
-  })
+// Define log format
+const logFormat = winston.format.combine(
+  winston.format.timestamp({
+    format: 'YYYY-MM-DD HH:mm:ss'
+  }),
+  winston.format.printf(info => `[${info.timestamp}] ${info.level}: ${info.message}`)
 );
 
-// Define custom format for file and JSON output
-const fileFormat = combine(
-  timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-  json()
-);
-
-// Create transports array
-const logTransports = [
-  // Console transport for all environments
-  new transports.Console({
-    level: level(),
-    format: consoleFormat
-  })
-];
-
-// Add file transports in production
-if (process.env.NODE_ENV === 'production') {
-  logTransports.push(
-    // File transport for errors and warnings
-    new transports.File({
-      filename: 'logs/error.log',
-      level: 'error',
-      format: fileFormat,
-      maxsize: 5242880, // 5MB
-      maxFiles: 5
+// Create logger instance
+const logger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  format: logFormat,
+  transports: [
+    // Console transport for all environments
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        logFormat
+      )
     }),
-    // File transport for all logs
-    new transports.File({
-      filename: 'logs/combined.log',
-      format: fileFormat,
-      maxsize: 5242880, // 5MB
-      maxFiles: 5
-    })
-  );
-}
-
-// Create the logger instance
-const logger = createLogger({
-  level: level(),
-  levels,
-  transports: logTransports,
-  exitOnError: false
+    
+    // File transport for production
+    ...(process.env.NODE_ENV === 'production' ? [
+      new winston.transports.File({
+        filename: path.join(__dirname, '../logs/error.log'),
+        level: 'error',
+        maxsize: 5242880, // 5MB
+        maxFiles: 5
+      }),
+      new winston.transports.File({
+        filename: path.join(__dirname, '../logs/combined.log'),
+        maxsize: 5242880, // 5MB
+        maxFiles: 5
+      })
+    ] : [])
+  ]
 });
 
-// HTTP request logger
-const httpLogger = (req, res, next) => {
-  // Log HTTP request
-  logger.http(`${req.method} ${req.url}`, {
-    ip: req.ip,
-    userAgent: req.headers['user-agent'],
-    referer: req.headers.referer || '',
-    query: req.query,
-    params: req.params
-  });
-  next();
-};
-
+// Export both the logger instance and as a property
 module.exports = logger;
-module.exports.httpLogger = httpLogger;
+module.exports.logger = logger;
