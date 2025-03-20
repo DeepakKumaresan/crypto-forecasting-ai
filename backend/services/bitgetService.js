@@ -21,6 +21,14 @@ class BitgetService {
     this.filteredPairsCache = null;
     this.lastCacheUpdate = 0;
     this.cacheValidityPeriod = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
+    
+    // Fallback data for when API calls fail
+    this.fallbackData = {
+      largeCapPairs: [],
+      midCapPairs: [],
+      allFilteredPairs: [],
+      filteredSymbols: []
+    };
 
     if (!this.apiKey || !this.secretKey || !this.passphrase) {
       logger.warn('Bitget API credentials not found in environment variables');
@@ -70,42 +78,88 @@ class BitgetService {
         method,
         url,
         headers,
-        data: method === 'GET' ? undefined : data
+        data: method === 'GET' ? undefined : data,
+        timeout: 10000 // Add timeout to prevent hanging requests
       };
 
       const response = await axios(options);
+      
+      // Check if the response has the expected structure
+      if (!response.data || (response.data.code !== '00000' && response.data.code !== 0)) {
+        throw new Error(`API returned error code: ${response.data?.code}, message: ${response.data?.msg}`);
+      }
+      
       return response.data;
     } catch (error) {
       logger.error(`Bitget API request failed: ${error.message}`, {
         endpoint,
         error: error.response?.data || error.message
       });
-      throw new Error(error.response?.data?.msg || error.message);
+      
+      // Throw a more informative error
+      throw new Error(error.response?.data?.msg || `Bitget API request failed: ${error.message}`);
     }
   }
 
   /**
-   * Make request to CoinGecko API
+   * Make request to CoinGecko API with retry and better error handling
    * @param {string} endpoint API endpoint
    * @param {Object} params Query parameters
    * @returns {Promise<Object>} API response
    */
   async requestCoinGecko(endpoint, params = {}) {
-    try {
-      const url = `${this.coinGeckoUrl}${endpoint}`;
-      const response = await axios.get(url, { params });
-      return response.data;
-    } catch (error) {
-      logger.error(`CoinGecko API request failed: ${error.message}`, {
-        endpoint,
-        error: error.response?.data || error.message
-      });
-      throw new Error(error.response?.data?.error || error.message);
+    const maxRetries = 3;
+    let retries = 0;
+    let lastError = null;
+
+    while (retries < maxRetries) {
+      try {
+        const url = `${this.coinGeckoUrl}${endpoint}`;
+        
+        // Add API key if available (for higher rate limits)
+        if (process.env.COINGECKO_API_KEY) {
+          params.x_cg_pro_api_key = process.env.COINGECKO_API_KEY;
+        }
+        
+        // Add a cache-busting parameter to avoid rate limiting issues
+        params._cacheBust = Date.now();
+        
+        const response = await axios.get(url, { 
+          params,
+          timeout: 15000, // Increase timeout for CoinGecko
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'Trading-Bot/1.0.0'
+          }
+        });
+        
+        return response.data;
+      } catch (error) {
+        lastError = error;
+        
+        // Log the error but only if it's not a rate limit issue or on the final retry
+        if (error.response?.status !== 429 || retries === maxRetries - 1) {
+          logger.error(`CoinGecko API request failed (attempt ${retries + 1}/${maxRetries}): ${error.message}`, {
+            endpoint,
+            status: error.response?.status,
+            error: error.response?.data || error.message
+          });
+        }
+        
+        // If we hit rate limits, wait longer between retries
+        const delayMs = error.response?.status === 429 ? 5000 : 1000;
+        await new Promise(resolve => setTimeout(resolve, delayMs * (retries + 1)));
+        
+        retries++;
+      }
     }
+    
+    // If all retries failed, throw the last error
+    throw new Error(`CoinGecko API request failed after ${maxRetries} attempts: ${lastError.message}`);
   }
 
   /**
-   * Get market cap data from CoinGecko for categorizing pairs
+   * Get market cap data from CoinGecko with fallback mechanism
    * @returns {Promise<Object>} Market cap data
    */
   async getMarketCapData() {
@@ -118,15 +172,46 @@ class BitgetService {
         sparkline: false
       });
       
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new Error('Invalid market cap data received from CoinGecko');
+      }
+      
       return data;
     } catch (error) {
       logger.error(`Failed to get market cap data: ${error.message}`);
-      throw error;
+      
+      // Implement fallback mechanism - use volume-based estimates if CoinGecko fails
+      logger.info('Using volume-based estimates for market cap due to API error');
+      return null;
     }
   }
 
   /**
-   * Get filtered list of top 10 large-cap and 30 mid-cap pairs
+   * Estimate market cap rank based on trading volume when CoinGecko fails
+   * @param {Array} pairs Array of trading pairs with volume data
+   * @returns {Array} Pairs with estimated market cap ranks
+   */
+  estimateMarketCapFromVolume(pairs) {
+    if (!Array.isArray(pairs) || pairs.length === 0) {
+      return [];
+    }
+    
+    // Sort pairs by volume (descending)
+    const sortedPairs = [...pairs].sort((a, b) => b.volume - a.volume);
+    
+    // Assign estimated ranks based on volume
+    return sortedPairs.map((pair, index) => ({
+      symbol: pair.symbol,
+      volume: pair.volume,
+      marketCapRank: index + 1, // Estimated rank based on volume
+      marketCap: pair.volume * 100, // Rough estimate: volume * 100 as placeholder
+      category: index < 20 ? 'large-cap' : 
+              index < 100 ? 'mid-cap' : 'small-cap'
+    }));
+  }
+
+  /**
+   * Get filtered list of top 10 large-cap and 30 mid-cap pairs with improved error handling
    * @returns {Promise<Object>} Filtered trading pairs by market cap
    */
   async getFilteredTradingPairs() {
@@ -153,35 +238,48 @@ class BitgetService {
         const symbol = pair.symbol.split('_')[0];
         return {
           symbol,
-          volume: parseFloat(pair.usdtVolume)
+          volume: parseFloat(pair.usdtVolume || pair.volumeUsd || '0')
         };
-      }).filter(pair => pair.volume > 0); // Ensure valid volume
+      }).filter(pair => pair.volume > 0 && pair.symbol); // Ensure valid volume and symbol
       
-      // Step 2: Get market cap data from CoinGecko
+      if (availablePairs.length === 0) {
+        throw new Error('No valid pairs extracted from Bitget data');
+      }
+      
+      let categorizedPairs = [];
+      
+      // Step 2: Try to get market cap data from CoinGecko
       const marketCapData = await this.getMarketCapData();
       
-      // Create a map for quick lookup of market cap rank
-      const marketCapRankMap = {};
-      marketCapData.forEach(coin => {
-        // Handle both uppercase and lowercase symbols
-        marketCapRankMap[coin.symbol.toUpperCase()] = {
-          rank: coin.market_cap_rank,
-          marketCap: coin.market_cap
-        };
-      });
-      
-      // Step 3: Categorize and filter pairs
-      const categorizedPairs = availablePairs.map(pair => {
-        const marketCapInfo = marketCapRankMap[pair.symbol.toUpperCase()] || { rank: 9999, marketCap: 0 };
-        return {
-          symbol: pair.symbol,
-          volume: pair.volume,
-          marketCapRank: marketCapInfo.rank,
-          marketCap: marketCapInfo.marketCap,
-          category: marketCapInfo.rank <= 20 ? 'large-cap' : 
-                  marketCapInfo.rank <= 100 ? 'mid-cap' : 'small-cap'
-        };
-      });
+      if (marketCapData) {
+        // Create a map for quick lookup of market cap rank
+        const marketCapRankMap = {};
+        marketCapData.forEach(coin => {
+          // Handle both uppercase and lowercase symbols for better matching
+          if (coin.symbol) {
+            marketCapRankMap[coin.symbol.toUpperCase()] = {
+              rank: coin.market_cap_rank || 9999,
+              marketCap: coin.market_cap || 0
+            };
+          }
+        });
+        
+        // Step 3: Categorize and filter pairs
+        categorizedPairs = availablePairs.map(pair => {
+          const marketCapInfo = marketCapRankMap[pair.symbol.toUpperCase()] || { rank: 9999, marketCap: 0 };
+          return {
+            symbol: pair.symbol,
+            volume: pair.volume,
+            marketCapRank: marketCapInfo.rank,
+            marketCap: marketCapInfo.marketCap,
+            category: marketCapInfo.rank <= 20 ? 'large-cap' : 
+                    marketCapInfo.rank <= 100 ? 'mid-cap' : 'small-cap'
+          };
+        });
+      } else {
+        // Fallback: Use volume-based estimates if CoinGecko fails
+        categorizedPairs = this.estimateMarketCapFromVolume(availablePairs);
+      }
       
       // Step 4: Sort and select top pairs by market cap
       const largeCapPairs = categorizedPairs
@@ -210,8 +308,13 @@ class BitgetService {
       };
       this.lastCacheUpdate = now;
       
+      // Also update fallback data
+      this.fallbackData = this.filteredPairsCache;
+      
       logger.info(`Filtered trading pairs: ${filteredSymbols.length} pairs selected (${largeCapPairs.length} large-cap, ${midCapPairs.length} mid-cap)`);
-      logger.debug(`Selected pairs: ${filteredSymbols.join(', ')}`);
+      if (filteredSymbols.length > 0) {
+        logger.debug(`Selected pairs: ${filteredSymbols.join(', ')}`);
+      }
       
       return this.filteredPairsCache;
     } catch (error) {
@@ -223,29 +326,51 @@ class BitgetService {
         return this.filteredPairsCache;
       }
       
-      throw error;
+      // If no cache is available, use fallback data
+      logger.warn('Using fallback data for trading pairs');
+      return this.fallbackData;
     }
   }
 
   /**
    * Get market data for USDT trading pairs, optionally filtered by market cap
+   * With improved error handling
    * @param {boolean} filtered Whether to filter pairs by market cap
    * @returns {Promise<Array>} List of market data
    */
   async getMarketData(filtered = true) {
     try {
       // Updated endpoint based on the latest Bitget API documentation
+      // The UMCBL refers to USDT-Margined Contract
       const response = await this.request('GET', '/api/mix/v1/market/tickers?productType=UMCBL');
       
+      if (!response.data || !Array.isArray(response.data)) {
+        throw new Error('Invalid market data format received from Bitget');
+      }
+      
+      // Filter out any invalid data
+      const validData = response.data.filter(item => 
+        item && item.symbol && (item.usdtVolume || item.volumeUsd)
+      );
+      
+      if (validData.length === 0) {
+        throw new Error('No valid market data found');
+      }
+      
       if (!filtered) {
-        return response.data; // Return all pairs without filtering
+        return validData; // Return all pairs without filtering
       }
       
       // Get filtered pairs
       const { filteredSymbols } = await this.getFilteredTradingPairs();
       
+      if (!filteredSymbols || filteredSymbols.length === 0) {
+        logger.warn('No filtered symbols available, returning all market data');
+        return validData;
+      }
+      
       // Filter market data to include only selected pairs
-      const filteredData = response.data.filter(pair => {
+      const filteredData = validData.filter(pair => {
         const symbol = pair.symbol.split('_')[0];
         return filteredSymbols.includes(symbol);
       });
@@ -254,12 +379,52 @@ class BitgetService {
       return filteredData;
     } catch (error) {
       logger.error(`Failed to get market data: ${error.message}`);
-      throw error;
+      
+      // Return empty array instead of throwing to prevent cascading failures
+      return [];
     }
   }
 
   /**
-   * Place a trade order
+   * Get fallback market data for use when all else fails
+   * @returns {Promise<Array>} Fallback market data
+   */
+  async getFallbackMarketData() {
+    try {
+      // First try to get real data
+      const realData = await this.getMarketData(true);
+      if (realData && realData.length > 0) {
+        return realData;
+      }
+      
+      // If that fails, return synthetic data based on our fallback
+      if (this.fallbackData.allFilteredPairs.length > 0) {
+        // Create synthetic market data from our fallback pairs
+        return this.fallbackData.allFilteredPairs.map(pair => ({
+          symbol: `${pair.symbol}_UMCBL`,
+          lastPrice: "0",
+          askOne: "0",
+          bidOne: "0",
+          baseVolume: "0",
+          usdtVolume: pair.volume.toString(),
+          high24h: "0",
+          low24h: "0",
+          timestamp: Date.now(),
+          priceChangePercent: "0",
+          // Add any other required fields with default values
+        }));
+      }
+      
+      // Last resort - return empty array
+      return [];
+    } catch (error) {
+      logger.error(`Failed to get fallback market data: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Place a trade order with improved validation and error handling
    * @param {string} symbol Trading symbol
    * @param {string} side 'buy' or 'sell'
    * @param {number} size Order size
@@ -270,33 +435,76 @@ class BitgetService {
    * @returns {Promise<Object>} Order response
    */
   async placeOrder(symbol, side, size, price = null, orderType = 'market', stopLoss = null, takeProfit = null) {
+    // Input validation
+    if (!symbol || typeof symbol !== 'string') {
+      throw new Error('Invalid symbol');
+    }
+    
+    if (!['buy', 'sell'].includes(side.toLowerCase())) {
+      throw new Error('Invalid side. Must be "buy" or "sell"');
+    }
+    
+    if (isNaN(parseFloat(size)) || parseFloat(size) <= 0) {
+      throw new Error('Invalid size. Must be a positive number');
+    }
+    
+    if (price !== null && (isNaN(parseFloat(price)) || parseFloat(price) <= 0)) {
+      throw new Error('Invalid price. Must be a positive number');
+    }
+    
+    if (!['limit', 'market'].includes(orderType.toLowerCase())) {
+      throw new Error('Invalid orderType. Must be "limit" or "market"');
+    }
+    
+    if (stopLoss !== null && isNaN(parseFloat(stopLoss))) {
+      throw new Error('Invalid stopLoss. Must be a number');
+    }
+    
+    if (takeProfit !== null && isNaN(parseFloat(takeProfit))) {
+      throw new Error('Invalid takeProfit. Must be a number');
+    }
+    
     try {
+      // Clean symbol format - ensure UMCBL suffix is not duplicated
+      const cleanSymbol = symbol.endsWith('_UMCBL') ? symbol : `${symbol}_UMCBL`;
+      const baseSymbol = cleanSymbol.split('_')[0];
+      
       // Verify that symbol is in our filtered list before placing order
       const { filteredSymbols } = await this.getFilteredTradingPairs();
-      const baseSymbol = symbol.split('_')[0];
       
       if (!filteredSymbols.includes(baseSymbol)) {
-        throw new Error(`Symbol ${baseSymbol} is not in the approved list of 40 trading pairs`);
+        throw new Error(`Symbol ${baseSymbol} is not in the approved list of trading pairs`);
       }
       
       const order = {
-        symbol: `${symbol}_UMCBL`,
+        symbol: cleanSymbol,
         marginCoin: 'USDT',
-        size: size.toString(),
+        size: parseFloat(size).toString(),
         side: side.toLowerCase() === 'buy' ? 'buy' : 'sell',
-        orderType: orderType,
+        orderType: orderType.toLowerCase(),
         timeInForceValue: 'normal'
       };
 
-      if (price && orderType === 'limit') {
-        order.price = price.toString();
+      if (price && orderType.toLowerCase() === 'limit') {
+        order.price = parseFloat(price).toString();
       }
 
       const response = await this.request('POST', '/api/mix/v1/order/placeOrder', order);
       
+      if (!response.data || !response.data.orderId) {
+        throw new Error('Order placement failed: No order ID received');
+      }
+      
+      logger.info(`Order placed successfully: ${response.data.orderId}`);
+      
       // If stop loss and take profit are specified, place them after the main order
-      if (response.data?.orderId && (stopLoss || takeProfit)) {
-        await this.placeStopOrders(symbol, side, response.data.orderId, stopLoss, takeProfit);
+      if (response.data.orderId && (stopLoss || takeProfit)) {
+        try {
+          await this.placeStopOrders(cleanSymbol, side, response.data.orderId, stopLoss, takeProfit);
+        } catch (stopOrderError) {
+          // Log error but don't fail the main order
+          logger.error(`Failed to place stop orders: ${stopOrderError.message}`);
+        }
       }
       
       return response.data;
@@ -307,7 +515,7 @@ class BitgetService {
   }
 
   /**
-   * Place stop loss and take profit orders
+   * Place stop loss and take profit orders with improved error handling
    * @param {string} symbol Trading symbol
    * @param {string} side Original order side
    * @param {string} parentOrderId Parent order ID
@@ -316,49 +524,80 @@ class BitgetService {
    * @returns {Promise<Object>} Stop orders response
    */
   async placeStopOrders(symbol, side, parentOrderId, stopLoss = null, takeProfit = null) {
+    if (!stopLoss && !takeProfit) {
+      return { message: 'No stop orders to place' };
+    }
+    
     const promises = [];
     const oppositeSide = side.toLowerCase() === 'buy' ? 'sell' : 'buy';
     
+    // Ensure the symbol has the correct format
+    const cleanSymbol = symbol.endsWith('_UMCBL') ? symbol : `${symbol}_UMCBL`;
+    
     if (stopLoss) {
       const stopLossOrder = {
-        symbol: `${symbol}_UMCBL`,
+        symbol: cleanSymbol,
         marginCoin: 'USDT',
-        triggerPrice: stopLoss.toString(),
+        triggerPrice: parseFloat(stopLoss).toString(),
         side: oppositeSide,
         orderType: 'market',
         timeInForceValue: 'normal',
         presetTakeProfitPrice: '',
         presetStopLossPrice: '',
-        clientOid: `sl_${parentOrderId}`,
+        clientOid: `sl_${parentOrderId}_${Date.now()}`, // Add timestamp for uniqueness
         triggerType: 'market_price'
       };
       
-      promises.push(this.request('POST', '/api/mix/v1/plan/placeTPSL', stopLossOrder));
+      promises.push(
+        this.request('POST', '/api/mix/v1/plan/placeTPSL', stopLossOrder)
+          .catch(error => {
+            logger.error(`Failed to place stop loss: ${error.message}`);
+            return { error: error.message, type: 'stop_loss' };
+          })
+      );
     }
     
     if (takeProfit) {
       const takeProfitOrder = {
-        symbol: `${symbol}_UMCBL`,
+        symbol: cleanSymbol,
         marginCoin: 'USDT',
-        triggerPrice: takeProfit.toString(),
+        triggerPrice: parseFloat(takeProfit).toString(),
         side: oppositeSide,
         orderType: 'market',
         timeInForceValue: 'normal',
         presetTakeProfitPrice: '',
         presetStopLossPrice: '',
-        clientOid: `tp_${parentOrderId}`,
+        clientOid: `tp_${parentOrderId}_${Date.now()}`, // Add timestamp for uniqueness
         triggerType: 'market_price'
       };
       
-      promises.push(this.request('POST', '/api/mix/v1/plan/placeTPSL', takeProfitOrder));
+      promises.push(
+        this.request('POST', '/api/mix/v1/plan/placeTPSL', takeProfitOrder)
+          .catch(error => {
+            logger.error(`Failed to place take profit: ${error.message}`);
+            return { error: error.message, type: 'take_profit' };
+          })
+      );
     }
     
     const results = await Promise.all(promises);
-    return results;
+    
+    // Check if any orders failed
+    const failures = results.filter(result => result.error);
+    if (failures.length > 0) {
+      logger.warn(`${failures.length} stop orders failed to place:`, failures);
+    }
+    
+    return {
+      results,
+      success: results.length - failures.length,
+      failures: failures.length
+    };
   }
 
   /**
    * Get account position information, optionally filtered by symbol
+   * With improved error handling
    * @param {string} symbol Trading symbol
    * @returns {Promise<Array>} Position information
    */
@@ -368,19 +607,36 @@ class BitgetService {
       let response;
       
       if (symbol) {
-        endpoint = `/api/mix/v1/position/singlePosition?symbol=${symbol}_UMCBL`;
+        // Clean up symbol format
+        const cleanSymbol = symbol.endsWith('_UMCBL') ? symbol : `${symbol}_UMCBL`;
+        endpoint = `/api/mix/v1/position/singlePosition?symbol=${cleanSymbol}`;
         response = await this.request('GET', endpoint);
-        return response.data;
+        
+        if (!response.data) {
+          throw new Error('No position data received');
+        }
+        
+        return Array.isArray(response.data) ? response.data : [response.data];
       } else {
         // If no symbol specified, get all positions but filter to our approved list
         endpoint = '/api/mix/v1/position/allPosition?productType=UMCBL';
         response = await this.request('GET', endpoint);
         
+        if (!response.data || !Array.isArray(response.data)) {
+          throw new Error('Invalid position data received');
+        }
+        
         // Get filtered symbols
         const { filteredSymbols } = await this.getFilteredTradingPairs();
         
+        if (!filteredSymbols || filteredSymbols.length === 0) {
+          // If no filtered symbols, return all positions
+          return response.data;
+        }
+        
         // Filter positions to only include approved pairs
         const filteredPositions = response.data.filter(position => {
+          if (!position || !position.symbol) return false;
           const baseSymbol = position.symbol.split('_')[0];
           return filteredSymbols.includes(baseSymbol);
         });
@@ -389,17 +645,23 @@ class BitgetService {
       }
     } catch (error) {
       logger.error(`Failed to get positions: ${error.message}`);
-      throw error;
+      // Return empty array instead of throwing to prevent cascading failures
+      return [];
     }
   }
 
   /**
-   * Get account balance information
+   * Get account balance information with improved error handling
    * @returns {Promise<Object>} Account balance
    */
   async getAccountBalance() {
     try {
       const response = await this.request('GET', '/api/mix/v1/account/accounts?productType=UMCBL');
+      
+      if (!response.data || !Array.isArray(response.data)) {
+        throw new Error('Invalid account balance data received');
+      }
+      
       return response.data;
     } catch (error) {
       logger.error(`Failed to get account balance: ${error.message}`);
@@ -409,6 +671,7 @@ class BitgetService {
 
   /**
    * Get trade history, optionally filtered by our approved coin list
+   * With improved error handling and pagination
    * @param {number} limit Max number of records
    * @param {number} startTime Start time in milliseconds
    * @param {number} endTime End time in milliseconds
@@ -429,6 +692,10 @@ class BitgetService {
       
       const response = await this.request('GET', endpoint);
       
+      if (!response.data || !Array.isArray(response.data)) {
+        throw new Error('Invalid trade history data received');
+      }
+      
       if (!filterByApprovedList) {
         return response.data;
       }
@@ -436,8 +703,14 @@ class BitgetService {
       // Get filtered symbols
       const { filteredSymbols } = await this.getFilteredTradingPairs();
       
+      if (!filteredSymbols || filteredSymbols.length === 0) {
+        // If no filtered symbols, return all trade history
+        return response.data;
+      }
+      
       // Filter trade history to only include approved pairs
       const filteredHistory = response.data.filter(trade => {
+        if (!trade || !trade.symbol) return false;
         const baseSymbol = trade.symbol.split('_')[0];
         return filteredSymbols.includes(baseSymbol);
       });
@@ -445,7 +718,8 @@ class BitgetService {
       return filteredHistory;
     } catch (error) {
       logger.error(`Failed to get trade history: ${error.message}`);
-      throw error;
+      // Return empty array instead of throwing to prevent cascading failures
+      return [];
     }
   }
 
@@ -454,8 +728,37 @@ class BitgetService {
    * @returns {Promise<Array>} List of approved symbols
    */
   async getApprovedSymbols() {
-    const { filteredSymbols } = await this.getFilteredTradingPairs();
-    return filteredSymbols;
+    try {
+      const { filteredSymbols } = await this.getFilteredTradingPairs();
+      return filteredSymbols || [];
+    } catch (error) {
+      logger.error(`Failed to get approved symbols: ${error.message}`);
+      return [];
+    }
+  }
+  
+  /**
+   * Initialize the service and prefetch data
+   * @returns {Promise<boolean>} Success status
+   */
+  async initialize() {
+    try {
+      logger.info('Initializing Bitget service...');
+      
+      // Pre-fetch filtered trading pairs
+      const { filteredSymbols } = await this.getFilteredTradingPairs();
+      
+      if (!filteredSymbols || filteredSymbols.length === 0) {
+        logger.warn('No filtered trading pairs found during initialization');
+      } else {
+        logger.info(`Successfully initialized with ${filteredSymbols.length} trading pairs`);
+      }
+      
+      return true;
+    } catch (error) {
+      logger.error(`Failed to initialize Bitget service: ${error.message}`);
+      return false;
+    }
   }
 }
 
