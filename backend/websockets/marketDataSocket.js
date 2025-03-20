@@ -6,7 +6,7 @@
 const WebSocket = require('ws');
 const crypto = require('crypto');
 const { EventEmitter } = require('events');
-const bitgetService = require('../services/BitgetService');
+const bitgetService = require('../services/bitgetService');
 const { logger } = require('../utils/logger');
 const { BITGET_API_KEY, BITGET_SECRET_KEY, BITGET_PASSPHRASE } = process.env;
 
