@@ -1,6 +1,6 @@
 const axios = require('axios');
 const bitgetService = require('./bitgetService');
-const { logger } = require('../utils/logger');
+const logger = require('../utils/logger');
 
 /**
  * Service to handle trading operations, including AI signal filtering and execution
@@ -16,8 +16,8 @@ class TradingService {
     
     // Initialize the service
     this.initialize().catch(err => {
-      const errorMessage = err ? (err.message || String(err)) : 'Unknown error';
-      logger.error(`Failed to initialize trading service: ${errorMessage}`);
+      // Fixed: Handle the case when err might be undefined
+      logger.error(`Failed to initialize trading service: ${err ? err.message || String(err) : 'Unknown error'}`);
     });
   }
 
