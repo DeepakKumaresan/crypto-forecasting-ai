@@ -122,7 +122,11 @@ server.listen(PORT, () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
   // Initialize market data WebSocket connection with Bitget
-  marketDataSocket.initializeBitgetConnection();
+  if (typeof marketDataSocket.initializeBitgetConnection === 'function') {
+    marketDataSocket.initializeBitgetConnection();
+  } else {
+    console.log('Bitget connection initialization skipped - function not available');
+  }
 });
 
 // Handle unexpected errors
