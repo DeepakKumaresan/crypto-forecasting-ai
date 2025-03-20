@@ -16,6 +16,7 @@ class TradingService {
     
     // Initialize the service
     this.initialize().catch(err => {
+      // Fixed error handling to avoid accessing undefined properties
       logger.error(`Failed to initialize trading service: ${err ? (err.message || String(err)) : 'Unknown error'}`);
     });
   }
