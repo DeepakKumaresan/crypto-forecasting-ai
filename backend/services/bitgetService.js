@@ -167,9 +167,11 @@ class BitgetService {
       const data = await this.requestCoinGecko('/coins/markets', {
         vs_currency: 'usd',
         order: 'market_cap_desc',
-        per_page: 250, // Fetch enough to cover all potential pairs
+        per_page: 100, // Reduced to avoid rate limiting
         page: 1,
-        sparkline: false
+        sparkline: false,
+        locale: 'en',
+        precision: 'full' // Explicitly request full precision
       });
       
       if (!Array.isArray(data) || data.length === 0) {
@@ -342,16 +344,17 @@ class BitgetService {
     try {
       // Updated endpoint based on the latest Bitget API documentation
       // The UMCBL refers to USDT-Margined Contract
-      const response = await this.request('GET', '/api/mix/v1/market/tickers?productType=UMCBL');
+      const response = await this.request('GET', '/api/v2/mix/market/tickers?productType=UMCBL');
       
       if (!response.data || !Array.isArray(response.data)) {
         throw new Error('Invalid market data format received from Bitget');
       }
       
       // Filter out any invalid data
-      const validData = response.data.filter(item => 
-        item && item.symbol && (item.usdtVolume || item.volumeUsd)
-      );
+      // Filter out any invalid data
+const validData = response.data.filter(item => 
+  item && item.symbol && item.symbol.includes('USDT')
+);
       
       if (validData.length === 0) {
         throw new Error('No valid market data found');
