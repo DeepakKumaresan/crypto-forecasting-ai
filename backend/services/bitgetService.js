@@ -147,7 +147,7 @@ class BitgetService {
         }
         
         // If we hit rate limits, wait longer between retries
-        const delayMs = error.response?.status === 429 ? 5000 : 1000;
+        const delayMs = error.response?.status === 429 ? 20000 : 1000;
         await new Promise(resolve => setTimeout(resolve, delayMs * (retries + 1)));
         
         retries++;
